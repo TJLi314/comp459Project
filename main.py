@@ -7,14 +7,13 @@ import random
 import pickle
 
 def make_NN():
-    NUM_NETWORKS = 50         # How many neural nets to generate
+    NUM_NETWORKS = 50         
     SAVE_DIR = "./trained_networks"  # Where to save the trained models
     DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-    # Create directory if needed
     os.makedirs(SAVE_DIR, exist_ok=True)
 
-    # MLP model
+    # MLP model designed for 0-9 digit classification
     class SmallMLP(nn.Module):
         def __init__(self, input_size=784, hidden_size=64, output_size=10):
             super(SmallMLP, self).__init__()
@@ -74,3 +73,7 @@ def make_NN():
         print(f"Saved model {i} with hidden size {hidden_size} and seed {seed}.")
 
     print("Done generating dataset!")
+
+
+if __name__ == "__main__":
+    make_NN()
