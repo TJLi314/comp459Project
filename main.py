@@ -215,19 +215,19 @@ def train(model, data_list, epochs=50, lr=1e-3):
 
 
 if __name__ == "__main__":
-    # make_NN()
+    make_NN()
     
     # Convert saved NNs to pyg data
-    graph_data = []
-    for i in range(NUM_NETWORKS):
-        print("Converting neural net " + str(i))
-        path = os.path.join(SAVE_DIR, f"mlp_{i}.pkl")
-        G = mlp_to_graph(path)
-        pyg_data = convert_networkx_to_pyg_data(G, mask_ratio=0.1)
-        graph_data.append(pyg_data)
+    # graph_data = []
+    # for i in range(NUM_NETWORKS):
+    #     print("Converting neural net " + str(i))
+    #     path = os.path.join(SAVE_DIR, f"mlp_{i}.pkl")
+    #     G = mlp_to_graph(path)
+    #     pyg_data = convert_networkx_to_pyg_data(G, mask_ratio=0.1)
+    #     graph_data.append(pyg_data)
     
-    # Train GNN
-    model = EdgeGNN()
-    print("Training GNN")
-    train(model, graph_data)
-    print("Done training")
+    # # Train GNN
+    # model = EdgeGNN()
+    # print("Training GNN")
+    # train(model, graph_data)
+    # print("Done training")
