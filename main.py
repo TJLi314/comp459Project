@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torch.utils.data as Dataloader
 from torchvision import datasets, transforms
 from torch_geometric.data import Data
 from torch_geometric.nn import MessagePassing
@@ -81,6 +82,25 @@ def make_NN():
         print(f"Saved model {i} with hidden size {hidden_size} and seed {seed}.")
 
     print("Done generating dataset!")
+
+# Tests accuracy of SmallMLP predictions on MNIST
+def test_NN(neural_net):
+    test_dataset = datasets.MNIST(root='./data', train=False, download=True, transform=transform)
+    test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False)
+    
+    neural_net.eval()
+
+    correct = 0
+    total = 0
+
+    with torch.no_grad():
+        for images, labels in test_loader:
+            outputs = model(images)
+            _, predicted = torch.max(outputs.data, 1)
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
+    
+    return correct/total
 
 def mlp_to_graph(mlp_path):
     with open(mlp_path, "rb") as f:
@@ -288,17 +308,18 @@ def convert_pyg_to_mlp(graph, input_size=784, output_size=10):
 
 if __name__ == "__main__":
     # Convert saved NNs to pyg data
-    graph_data = []
-    for i in range(NUM_NETWORKS):
-        print("Converting neural net " + str(i))
-        path = os.path.join(SAVE_DIR, f"mlp_{i}.pkl")
-        G = mlp_to_graph(path)
-        pyg_data = convert_networkx_to_pyg_data(G, mask_ratio=0.1)
-        graph_data.append(pyg_data)
+    # graph_data = []
+    # for i in range(NUM_NETWORKS):
+    #     print("Converting neural net " + str(i))
+    #     path = os.path.join(SAVE_DIR, f"mlp_{i}.pkl")
+    #     G = mlp_to_graph(path)
+    #     pyg_data = convert_networkx_to_pyg_data(G, mask_ratio=0.1)
+    #     graph_data.append(pyg_data)
+        # Graph data train test split
+        
+    graph_data = torch.load("graph_data.pt")
     
-    # Graph data train test split
-    # test comment
-    graph_data.shuffle(graph_data)
+
 
     split_index = int(0.8 * len(graph_data))
     train_graph = graph_data[:split_index]
@@ -308,8 +329,13 @@ if __name__ == "__main__":
     model = EdgeGNN()
     print("Training GNN")
     train(model, train_graph)
-    print("Done training")
+    print("Done train_graph")
+    # Save model weights
+    torch.save(model.state_dict(), "gnn_model.pt")
 
-    # Predicting for the test graphs, then 
     pred_graphs = complete_graphs(model, test_graph)
     completed_mlp = [convert_pyg_to_mlp(graph) for graph in pred_graphs]
+
+    i = split_index
+    for mlp in completed_mlp:
+        print(f"Accuracy for model no {i} is: {test_NN(mlp)}")
