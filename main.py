@@ -287,8 +287,6 @@ def convert_pyg_to_mlp(graph, input_size=784, output_size=10):
 
 
 if __name__ == "__main__":
-    # make_NN()
-    
     # Convert saved NNs to pyg data
     graph_data = []
     for i in range(NUM_NETWORKS):
