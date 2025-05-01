@@ -85,8 +85,9 @@ def make_NN():
 
 # Tests accuracy of SmallMLP predictions on MNIST
 def test_NN(neural_net):
+    transform = transforms.ToTensor()
     test_dataset = datasets.MNIST(root='./data', train=False, download=True, transform=transform)
-    test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False)
+    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=64, shuffle=False)
     
     neural_net.eval()
 
@@ -246,6 +247,7 @@ def complete_graphs(model, test_data):
     completed_graphs = []
     
     with torch.no_grad():
+        i = 1
         for data in test_data:
             pred_weights = model(data.x, data.edge_index, data.edge_attr, data.target_edge_index)
             
@@ -264,6 +266,8 @@ def complete_graphs(model, test_data):
                 edge_index=completed_edge_index,
                 edge_attr=completed_edge_attr
             ))
+            print(f"predicted {i}th graph")
+            i+=1
 
     return completed_graphs
 
@@ -287,6 +291,7 @@ def convert_pyg_to_mlp(graph, input_size=784, output_size=10):
 
     mlp = SmallMLP(input_size=input_size, hidden_size=len(hidden_nodes), output_size=output_size)
 
+
     with torch.no_grad():
         for i, hidden_idx in enumerate(hidden_nodes):
             for j, input_idx in enumerate(input_nodes):
@@ -302,7 +307,8 @@ def convert_pyg_to_mlp(graph, input_size=784, output_size=10):
         # Set biases for fc2
         for i, output_idx in enumerate(output_nodes):
             mlp.fc2.bias.data[i] = node_features[output_idx][0]  # bias is first feature
-    
+
+    print("succesfully converted to mlp")
     return mlp
 
 
@@ -318,24 +324,26 @@ if __name__ == "__main__":
         # Graph data train test split
         
     graph_data = torch.load("graph_data.pt")
-    
-
 
     split_index = int(0.8 * len(graph_data))
     train_graph = graph_data[:split_index]
     test_graph = graph_data[split_index:]
 
     # Train GNN
-    model = EdgeGNN()
-    print("Training GNN")
-    train(model, train_graph)
-    print("Done train_graph")
+    # model = EdgeGNN()
+    # train(model, train_graph)
     # Save model weights
-    torch.save(model.state_dict(), "gnn_model.pt")
+    # torch.save(model.state_dict(), "gnn_model.pt")
+    
+    # Load in model
+    model = EdgeGNN()  # Must match architecture
+    model.load_state_dict(torch.load("gnn_model.pt"))
+    model.eval()  # Set to evaluation mode if testing
+    print("Loaded model")
 
     pred_graphs = complete_graphs(model, test_graph)
     completed_mlp = [convert_pyg_to_mlp(graph) for graph in pred_graphs]
 
     i = split_index
     for mlp in completed_mlp:
-        print(f"Accuracy for model no {i} is: {test_NN(mlp)}")
+        print(f"Accuracy for model no {i} is: %{test_NN(mlp)}")
