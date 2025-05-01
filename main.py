@@ -12,25 +12,27 @@ import pickle
 import networkx as nx
 
 SAVE_DIR = "./trained_networks"  # Where to save the trained models
-NUM_NETWORKS = 500     
+NUM_NETWORKS = 500   
+
+
+# MLP model designed for 0-9 digit classification
+class SmallMLP(nn.Module):
+    def __init__(self, input_size=784, hidden_size=64, output_size=10):
+        super(SmallMLP, self).__init__()
+        self.fc1 = nn.Linear(input_size, hidden_size)
+        self.fc2 = nn.Linear(hidden_size, output_size)
+    
+    def forward(self, x):
+        x = x.view(-1, 784)  # Flatten input
+        x = torch.relu(self.fc1(x))
+        x = self.fc2(x)
+        return x
 
 def make_NN():
     DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
     os.makedirs(SAVE_DIR, exist_ok=True)
 
-    # MLP model designed for 0-9 digit classification
-    class SmallMLP(nn.Module):
-        def __init__(self, input_size=784, hidden_size=64, output_size=10):
-            super(SmallMLP, self).__init__()
-            self.fc1 = nn.Linear(input_size, hidden_size)
-            self.fc2 = nn.Linear(hidden_size, output_size)
-        
-        def forward(self, x):
-            x = x.view(-1, 784)  # Flatten input
-            x = torch.relu(self.fc1(x))
-            x = self.fc2(x)
-            return x
 
     # Prepare MNIST Data 
     transform = transforms.Compose([
@@ -195,6 +197,8 @@ class EdgeGNN(MessagePassing):
         h_src = x[src]
         h_dst = x[dst]
         return self.edge_pred_mlp(torch.cat([h_src, h_dst], dim=-1)).squeeze()
+    
+
 
 def train(model, data_list, epochs=50, lr=1e-3):
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
@@ -214,6 +218,74 @@ def train(model, data_list, epochs=50, lr=1e-3):
         print(f"Epoch {epoch}: Loss = {total_loss:.4f}")
 
 
+# Predicts the missing edges in networkx graphs, add them to said graph, then
+# returns a list of graphs with complete networks
+
+def complete_graphs(model, test_data):
+    model.eval()
+    completed_graphs = []
+    
+    with torch.no_grad():
+        for data in test_data:
+            pred_weights = model(data.x, data.edge_index, data.edge_attr, data.target_edge_index)
+            
+            completed_edge_index = data.edge_index.clone()
+            completed_edge_attr = data.edge_attr.clone()
+
+            for idx, edge_idx in enumerate(data.target_edge_index):
+                src, dst = data.edge_index[:, edge_idx].tolist()
+                weight = pred_weights[idx].item()
+                
+                completed_edge_index = torch.cat([completed_edge_index, torch.tensor([[src], [dst]])], dim=-1)
+                completed_edge_attr = torch.cat([completed_edge_attr, torch.tensor([[weight]])], dim=0)
+
+            completed_graphs.append(Data(
+                x=data.x,
+                edge_index=completed_edge_index,
+                edge_attr=completed_edge_attr
+            ))
+
+    return completed_graphs
+
+# Turns pyg graph representation back into SmallMLP representation
+
+def convert_pyg_to_mlp(graph, input_size=784, output_size=10):
+    node_features = graph.x
+    edge_index = graph.edge_index
+    edge_weights = graph.edge_attr
+
+    input_nodes = [i for i, feat in enumerate(node_features) if feat[1:4].tolist() == [1, 0, 0]]
+    hidden_nodes = [i for i, feat in enumerate(node_features) if feat[1:4].tolist() == [0, 1, 0]]
+    output_nodes = [i for i, feat in enumerate(node_features) if feat[1:4].tolist() == [0, 0, 1]]
+
+    adjacency = {}
+    for src, dst in edge_index.t().tolist():
+        weight = edge_weights[src][0].item()  # Get the weight for this edge
+        if dst not in adjacency:
+            adjacency[dst] = {}
+        adjacency[dst][src] = weight
+
+    mlp = SmallMLP(input_size=input_size, hidden_size=len(hidden_nodes), output_size=output_size)
+
+    with torch.no_grad():
+        for i, hidden_idx in enumerate(hidden_nodes):
+            for j, input_idx in enumerate(input_nodes):
+                mlp.fc1.weight.data[i, j] = adjacency[hidden_idx].get(input_idx, 0.0)
+        for i, hidden_idx in enumerate(hidden_nodes):
+            mlp.fc1.bias.data[i] = node_features[hidden_idx][0]  # bias is first feature
+        
+        # Set weights for fc2 (hidden to output)
+        for i, output_idx in enumerate(output_nodes):
+            for j, hidden_idx in enumerate(hidden_nodes):
+                mlp.fc2.weight.data[i, j] = adjacency[output_idx].get(hidden_idx, 0.0)
+        
+        # Set biases for fc2
+        for i, output_idx in enumerate(output_nodes):
+            mlp.fc2.bias.data[i] = node_features[output_idx][0]  # bias is first feature
+    
+    return mlp
+
+
 if __name__ == "__main__":
     # make_NN()
     
@@ -226,8 +298,20 @@ if __name__ == "__main__":
         pyg_data = convert_networkx_to_pyg_data(G, mask_ratio=0.1)
         graph_data.append(pyg_data)
     
+    # Graph data train test split
+
+    graph_data.shuffle(graph_data)
+
+    split_index = int(0.8 * len(graph_data))
+    train_graph = graph_data[:split_index]
+    test_graph = graph_data[split_index:]
+
     # Train GNN
     model = EdgeGNN()
     print("Training GNN")
-    train(model, graph_data)
+    train(model, train_graph)
     print("Done training")
+
+    # Predicting for the test graphs, then 
+    pred_graphs = complete_graphs(model, test_graph)
+    completed_mlp = [convert_pyg_to_mlp(graph) for graph in pred_graphs]
