@@ -12,7 +12,7 @@ import pickle
 import networkx as nx
 
 SAVE_DIR = "./trained_networks"  # Where to save the trained models
-NUM_NETWORKS = 50     
+NUM_NETWORKS = 500     
 
 def make_NN():
     DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -58,7 +58,7 @@ def make_NN():
 
         # Train for a few epochs
         model.train()
-        for epoch in range(3):  # Quick training
+        for epoch in range(5):  # Quick training
             for batch_idx, (data, target) in enumerate(train_loader):
                 data, target = data.to(DEVICE), target.to(DEVICE)
                 optimizer.zero_grad()
@@ -196,7 +196,7 @@ class EdgeGNN(MessagePassing):
         h_dst = x[dst]
         return self.edge_pred_mlp(torch.cat([h_src, h_dst], dim=-1)).squeeze()
 
-def train(model, data_list, epochs=20, lr=1e-3):
+def train(model, data_list, epochs=50, lr=1e-3):
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     loss_fn = MSELoss()
 
