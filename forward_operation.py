@@ -6,6 +6,8 @@ import torch.nn.functional as F
 from torchvision import datasets, transforms
 from torch_geometric.nn import MessagePassing
 from torch_geometric.data import Data
+from torch.utils.data import Subset
+from torch.utils.data import random_split
 
 # MLP model designed for 0-9 digit classification
 class SmallMLP(nn.Module):
@@ -21,16 +23,28 @@ class SmallMLP(nn.Module):
         return x
 
 class MLPForwardLayer(MessagePassing):
-    def __init__(self, activation=None):
+    def __init__(self, in_channels, out_channels, activation=None):
         super().__init__(aggr='add')
+        self.linear = nn.Linear(in_channels, out_channels)
         self.activation = activation
 
-    def forward(self, x, edge_index, edge_weight, bias=None):
+    def forward(self, x, edge_index, edge_weight, bias_tensor):
+        # edge_weight: shape [num_edges]
+        # bias_tensor: shape [num_nodes, 1] or broadcastable
+
+        # propagate handles message passing
         out = self.propagate(edge_index, x=x, edge_weight=edge_weight)
-        if bias is not None:
-            out += bias
+
+        # Add bias
+        out += bias_tensor
+
+        # Linear transformation
+        out = self.linear(out)
+
+        # Optional activation
         if self.activation:
             out = self.activation(out)
+
         return out
 
     def message(self, x_j, edge_weight):
@@ -39,12 +53,8 @@ class MLPForwardLayer(MessagePassing):
 class GNNMLPSimulator(torch.nn.Module):
     def __init__(self, input_size, hidden_size, output_size):
         super().__init__()
-        self.input_size = input_size
-        self.hidden_size = hidden_size
-        self.output_size = output_size
-
-        self.input_to_hidden = MLPForwardLayer(activation=F.relu)
-        self.hidden_to_output = MLPForwardLayer(activation=None)
+        self.input_to_hidden = MLPForwardLayer(1, 1, activation=F.relu)
+        self.hidden_to_output = MLPForwardLayer(1, 1, activation=None)
 
     def forward(self, x_input, edge_index, edge_attr, node_types, bias_vec):
         # Split node features
@@ -56,7 +66,9 @@ class GNNMLPSimulator(torch.nn.Module):
 
         # Initial activations
         x = torch.zeros_like(bias_tensor)
-        x[input_mask] = x_input
+        input_mask = node_types == 0
+        x[input_mask] = x_input[:input_mask.sum()]
+        # x[input_mask] = x_input
 
         # Step 1: Input → Hidden
         edge_mask_1 = (node_types[edge_index[0]] == 0) & (node_types[edge_index[1]] == 1)
@@ -114,7 +126,7 @@ def mlp_to_graph(mlp_path):
     return G
 
 def convert_networkx_to_pyg_data(G, mnist_input=None):
-    type_map = {"input": 0, "hidden": 1, "output": 2}
+    type_map = {"in": 0, "hidden": 1, "out": 2}
     node_feats = []
     node_types = []
     biases = []
@@ -135,7 +147,8 @@ def convert_networkx_to_pyg_data(G, mnist_input=None):
         edge_index.append([i, j])
         edge_attr.append([data.get("weight", 0.0)])
 
-    x_input = torch.tensor(mnist_input.view(-1, 1), dtype=torch.float) if mnist_input is not None else torch.zeros((len(node_feats), 1))
+    # x_input = torch.tensor(mnist_input.view(-1, 1), dtype=torch.float) if mnist_input is not None else torch.zeros((len(node_feats), 1))
+    x_input = mnist_input.view(-1, 1).clone().detach()
     
     return Data(
         x=x_input,
@@ -152,7 +165,9 @@ def train_gnn_simulator(model, gnn, dataloader, optimizer, device):
 
     for epoch in range(30):
         total_loss = 0
+        print(f"Starting epoch {epoch}")
         for data, label in dataloader:
+            
             data = data.to(device)
             label = label.to(device)
 
@@ -162,7 +177,7 @@ def train_gnn_simulator(model, gnn, dataloader, optimizer, device):
             gt = model(data).detach()
 
             # Build graph from MLP and image
-            G = mlp_to_graph("mlp_0.pkl")
+            G = mlp_to_graph("./trained_networks/mlp_0.pkl")
             pyg_data = convert_networkx_to_pyg_data(G, mnist_input=data[0])
 
             pyg_data = pyg_data.to(device)
@@ -175,23 +190,37 @@ def train_gnn_simulator(model, gnn, dataloader, optimizer, device):
                 bias_vec=pyg_data.bias_vec
             )
 
+            pred = pred.view(1, -1)
+            
             loss = loss_fn(pred, gt)
             loss.backward()
             optimizer.step()
             total_loss += loss.item()
 
         print(f"Epoch {epoch} Loss: {total_loss:.4f}")
+        
+def evaluate_gnn_simulator(mlp, gnn, dataloader, device):
+    gnn.eval()
+    total_loss = 0
+    with torch.no_grad():
+        for x, _ in dataloader:
+            x = x.to(device)
+            mlp_out = mlp(x.view(x.size(0), -1))
+            gnn_out = gnn(x.view(x.size(0), -1))
+            loss = torch.nn.functional.mse_loss(gnn_out, mlp_out)
+            total_loss += loss.item()
+    print(f"Test MSE loss: {total_loss / len(dataloader):.6f}")
 
 
 if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Load one MLP
-    mlp_info = pickle.load(open("mlp_0.pkl", "rb"))
+    mlp_info = pickle.load(open("./trained_networks/mlp_0.pkl", "rb"))
     hidden_size = mlp_info["hidden_size"]
     model = SmallMLP(hidden_size=hidden_size).to(device)
     model.load_state_dict(mlp_info["state_dict"])
-
+    
     # Initialize GNN
     gnn = GNNMLPSimulator(input_size=784, hidden_size=hidden_size, output_size=10).to(device)
     optimizer = torch.optim.Adam(gnn.parameters(), lr=1e-3)
@@ -202,7 +231,21 @@ if __name__ == "__main__":
         transforms.Normalize((0.1307,), (0.3081,))
     ])
     mnist = datasets.MNIST(root="./data", train=True, download=True, transform=transform)
-    dataloader = torch.utils.data.DataLoader(mnist, batch_size=1, shuffle=True)
+    subset_size = 125  # or any smaller number
+    mnist_subset = Subset(mnist, range(subset_size))
+
+    # Train/test split
+    train_size = int(0.8 * subset_size)
+    test_size = subset_size - train_size
+    train_dataset, test_dataset = random_split(mnist_subset, [train_size, test_size])
+
+    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=1, shuffle=True)
+    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=1, shuffle=False)
 
     # Train
-    train_gnn_simulator(model, gnn, dataloader, optimizer, device)
+    # print("Starting training")
+    # train_gnn_simulator(model, gnn, train_loader, optimizer, device)
+
+    # # Save model
+    # torch.save(gnn.state_dict(), "gnn_forward_op_30.pt")
+    

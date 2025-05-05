@@ -96,14 +96,17 @@ def test_NN(neural_net):
     correct = 0
     total = 0
 
+    all_outputs = []
     with torch.no_grad():
         for images, labels in test_loader:
-            outputs = model(images)
+            outputs = neural_net(images)
+            all_outputs.append(outputs)
+            
             _, predicted = torch.max(outputs.data, 1)
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
-    
-    return correct/total
+
+    return all_outputs, correct/total
 
 def mlp_to_graph(mlp_path):
     with open(mlp_path, "rb") as f:
@@ -374,28 +377,112 @@ if __name__ == "__main__":
     test_graph = graph_data[split_index:]
 
     # Train GNN
-    # model = EdgeGNN()
-    # train(model, train_graph)
+    # gnn = EdgeGNN()
+    # train(gnn, train_graph)
     # # Save model weights
-    # torch.save(model.state_dict(), "gnn_edge_pred.pt")
+    # torch.save(gnn.state_dict(), "gnn_edge_pred.pt")
     
     # Load in model
-    model = EdgeGNN()  # Must match architecture
-    model.load_state_dict(torch.load("gnn_edge_pred.pt"))
-    model.eval()  # Set to evaluation mode if testing
-    print("Loaded model")
+    gnn = EdgeGNN()  # Must match architecture
+    gnn.load_state_dict(torch.load("gnn_edge_pred.pt"))
+    gnn.eval()  # Set to evaluation mode if testing
+    print("Loaded gnn")
     
-    # Evaluate the model
-    preds, targets = evaluate_verbose(model, test_graph)
-    # print(preds)
-    # print(targets)
+    # Evaluate the gnn
+    # preds, targets = evaluate_verbose(gnn, test_graph)
+    # # print(preds)
+    # # print(targets)
 
-    # Visualize predictions
-    plot_predictions(preds, targets)
+    # # Visualize predictions
+    # plot_predictions(preds, targets)
 
-    # pred_graphs = complete_graphs(model, test_graph)
-    # completed_mlp = [convert_pyg_to_mlp(graph) for graph in pred_graphs]
+    pred_graphs = complete_graphs(gnn, test_graph)
+    completed_mlp = [convert_pyg_to_mlp(graph) for graph in pred_graphs]
 
-    # i = split_index
-    # for mlp in completed_mlp:
-    #     print(f"Accuracy for model no {i} is: %{test_NN(mlp)}")
+    i = split_index
+    completed_results = []
+    original_results = []
+    similarities = []
+    for j in range(i, 500):
+        # Completed MLP results
+        mlp = completed_mlp[j - i]
+        completed_outputs, res = test_NN(mlp)
+        print(f"Accuracy for completed model no {j} is: {res}")
+        completed_results.append(res)
+        
+        # Original MLP results
+        with open("./trained_networks/mlp_" + str(j) + ".pkl", "rb") as f:
+            mlp_info = pickle.load(f)
+
+        # Extract architecture parameters
+        hidden_size = mlp_info["hidden_size"]
+
+        # Recreate the model and load weights
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        model = SmallMLP(hidden_size=hidden_size).to(device)
+        model.load_state_dict(mlp_info["state_dict"])
+        
+        original_outputs, res = test_NN(model)
+        print(f"Accuracy for original model no {j} is: {res}")
+        original_results.append(res)
+        
+        # Compare vectors
+        # Convert to PyTorch tensors
+        # If outputs are tensors, convert to lists first
+        if isinstance(completed_outputs[0], torch.Tensor):
+            completed_outputs = [x.tolist() for x in completed_outputs]
+        if isinstance(original_outputs[0], torch.Tensor):
+            original_outputs = [x.tolist() for x in original_outputs]
+    
+        completed_outputs = torch.tensor(completed_outputs, dtype=torch.float32)
+        original_outputs = torch.tensor(original_outputs, dtype=torch.float32)
+        
+        # Normalize vectors to unit length
+        array1_norm = F.normalize(completed_outputs, dim=1)
+        array2_norm = F.normalize(original_outputs, dim=1)
+
+        # Compute cosine similarities for each pair
+        cos_sims = (array1_norm * array2_norm).sum(dim=1)  # shape: [N]
+
+        # Average similarity
+        average_similarity = cos_sims.mean().item()
+        similarities.append(average_similarity)
+    
+    torch.save({"similarities": similarities}, "similarities.pt")
+    
+    # x-axis is just the indices
+    x = range(len(completed_results))
+
+    # Plot both datasets
+    plt.plot(x, similarities, color="blue", marker="o", markersize=4)
+
+    # Add labels and legend
+    plt.xlabel("Neural Net number")
+    plt.ylabel("Average Cosine Similarity")
+    plt.title("Average Cosine Similarity of Predicted vs Original Neural Net Outputs")
+    plt.grid(True)
+
+    # Show the plot
+    plt.show()
+    
+    # with open("arrays.pkl", "rb") as f:
+    #     data = pickle.load(f)
+    #     completed_results = data["array1"]
+    #     original_results = data["array2"]
+    
+    # # x-axis is just the indices
+    # x = range(len(completed_results))
+
+    # # Plot both datasets
+    # plt.plot(x, completed_results, label="Predicted Neural Nets", color="blue", marker="o", markersize=4)
+    # plt.plot(x, original_results, label="Original Neural Nets", color="green", marker="o", markersize=4)
+
+    # # Add labels and legend
+    # plt.xlabel("Neural Net number")
+    # plt.ylabel("Prediction Accuracy")
+    # plt.title("Predicted vs Original Neural Net Prediction Accuracy")
+    # plt.legend()
+    # plt.grid(True)
+
+    # # Show the plot
+    # plt.show()
