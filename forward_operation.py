@@ -1,6 +1,7 @@
 import pickle
 import networkx as nx
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 from torchvision import datasets, transforms
 from torch_geometric.nn import MessagePassing
@@ -149,7 +150,7 @@ def train_gnn_simulator(model, gnn, dataloader, optimizer, device):
     gnn.train()
     loss_fn = torch.nn.MSELoss()
 
-    for epoch in range(5):
+    for epoch in range(30):
         total_loss = 0
         for data, label in dataloader:
             data = data.to(device)
@@ -161,7 +162,7 @@ def train_gnn_simulator(model, gnn, dataloader, optimizer, device):
             gt = model(data).detach()
 
             # Build graph from MLP and image
-            G = mlp_to_graph("path_to_mlp.pkl")
+            G = mlp_to_graph("mlp_0.pkl")
             pyg_data = convert_networkx_to_pyg_data(G, mnist_input=data[0])
 
             pyg_data = pyg_data.to(device)
@@ -186,7 +187,7 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Load one MLP
-    mlp_info = pickle.load(open("path_to_mlp.pkl", "rb"))
+    mlp_info = pickle.load(open("mlp_0.pkl", "rb"))
     hidden_size = mlp_info["hidden_size"]
     model = SmallMLP(hidden_size=hidden_size).to(device)
     model.load_state_dict(mlp_info["state_dict"])

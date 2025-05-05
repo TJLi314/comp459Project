@@ -377,11 +377,11 @@ if __name__ == "__main__":
     # model = EdgeGNN()
     # train(model, train_graph)
     # # Save model weights
-    # torch.save(model.state_dict(), "gnn_model_2.pt")
+    # torch.save(model.state_dict(), "gnn_edge_pred.pt")
     
     # Load in model
     model = EdgeGNN()  # Must match architecture
-    model.load_state_dict(torch.load("gnn_model_2.pt"))
+    model.load_state_dict(torch.load("gnn_edge_pred.pt"))
     model.eval()  # Set to evaluation mode if testing
     print("Loaded model")
     
