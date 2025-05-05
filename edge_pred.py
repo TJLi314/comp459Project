@@ -11,6 +11,8 @@ import os
 import random
 import pickle
 import networkx as nx
+from sklearn.metrics import mean_squared_error, r2_score
+import matplotlib.pyplot as plt
 
 SAVE_DIR = "./trained_networks"  # Where to save the trained models
 NUM_NETWORKS = 500   
@@ -212,14 +214,11 @@ class EdgeGNN(MessagePassing):
         return self.update_mlp(aggr_out)
 
     def predict_edge_weights(self, x, edge_index, target_edge_index):
-        # Predict weight for each masked edge
-        src = edge_index[0, target_edge_index]
-        dst = edge_index[1, target_edge_index]
+        src = edge_index[0][target_edge_index]
+        dst = edge_index[1][target_edge_index]
         h_src = x[src]
         h_dst = x[dst]
-        return self.edge_pred_mlp(torch.cat([h_src, h_dst], dim=-1)).squeeze()
-    
-
+        return self.edge_pred_mlp(torch.cat([h_src, h_dst], dim=-1)).view(-1)
 
 def train(model, data_list, epochs=50, lr=1e-3):
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
@@ -238,6 +237,51 @@ def train(model, data_list, epochs=50, lr=1e-3):
             total_loss += loss.item()
         print(f"Epoch {epoch}: Loss = {total_loss:.4f}")
 
+def evaluate_verbose(model, test_data):
+    model.eval()
+    total_mse = 0.0
+    total_r2 = 0.0
+    all_preds = []
+    all_targets = []
+
+    with torch.no_grad():
+        for idx, data in enumerate(test_data):
+            pred = model(data.x, data.edge_index, data.edge_attr, data.target_edge_index)
+            target = data.target_weights
+
+            pred_np = pred.cpu().numpy()
+            target_np = target.cpu().numpy()
+
+            mse = mean_squared_error(target_np, pred_np)
+            r2 = r2_score(target_np, pred_np)
+
+            total_mse += mse
+            total_r2 += r2
+
+            print(f"\n--- Graph {idx} ---")
+            for i, (p, t) in enumerate(zip(pred_np, target_np)):
+                print(f"Edge {i}: Predicted = {p:.4f}, Target = {t:.4f}")
+
+            all_preds.extend(pred_np)
+            all_targets.extend(target_np)
+
+    avg_mse = total_mse / len(test_data)
+    avg_r2 = total_r2 / len(test_data)
+
+    print(f"\nOverall Test MSE: {avg_mse:.4f}")
+    print(f"Overall Test R² Score: {avg_r2:.4f}")
+
+    return all_preds, all_targets
+
+def plot_predictions(preds, targets):
+    plt.figure(figsize=(6, 6))
+    plt.scatter(targets, preds, alpha=0.5)
+    plt.plot([min(targets), max(targets)], [min(targets), max(targets)], 'r--')  # y = x line
+    plt.xlabel("True Edge Weights")
+    plt.ylabel("Predicted Edge Weights")
+    plt.title("Edge Weight Prediction")
+    plt.grid(True)
+    plt.show()
 
 # Predicts the missing edges in networkx graphs, add them to said graph, then
 # returns a list of graphs with complete networks
@@ -332,18 +376,26 @@ if __name__ == "__main__":
     # Train GNN
     # model = EdgeGNN()
     # train(model, train_graph)
-    # Save model weights
-    # torch.save(model.state_dict(), "gnn_model.pt")
+    # # Save model weights
+    # torch.save(model.state_dict(), "gnn_model_2.pt")
     
     # Load in model
     model = EdgeGNN()  # Must match architecture
-    model.load_state_dict(torch.load("gnn_model.pt"))
+    model.load_state_dict(torch.load("gnn_model_2.pt"))
     model.eval()  # Set to evaluation mode if testing
     print("Loaded model")
+    
+    # Evaluate the model
+    preds, targets = evaluate_verbose(model, test_graph)
+    # print(preds)
+    # print(targets)
 
-    pred_graphs = complete_graphs(model, test_graph)
-    completed_mlp = [convert_pyg_to_mlp(graph) for graph in pred_graphs]
+    # Visualize predictions
+    plot_predictions(preds, targets)
 
-    i = split_index
-    for mlp in completed_mlp:
-        print(f"Accuracy for model no {i} is: %{test_NN(mlp)}")
+    # pred_graphs = complete_graphs(model, test_graph)
+    # completed_mlp = [convert_pyg_to_mlp(graph) for graph in pred_graphs]
+
+    # i = split_index
+    # for mlp in completed_mlp:
+    #     print(f"Accuracy for model no {i} is: %{test_NN(mlp)}")
