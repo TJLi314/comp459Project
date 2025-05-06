@@ -8,6 +8,7 @@ from torch_geometric.nn import MessagePassing
 from torch_geometric.data import Data
 from torch.utils.data import Subset
 from torch.utils.data import random_split
+import matplotlib.pyplot as plt
 
 # MLP model designed for 0-9 digit classification
 class SmallMLP(nn.Module):
@@ -29,16 +30,10 @@ class MLPForwardLayer(MessagePassing):
         self.activation = activation
 
     def forward(self, x, edge_index, edge_weight, bias_tensor):
-        # edge_weight: shape [num_edges]
-        # bias_tensor: shape [num_nodes, 1] or broadcastable
-
         # propagate handles message passing
         out = self.propagate(edge_index, x=x, edge_weight=edge_weight)
 
-        # Add bias
         out += bias_tensor
-
-        # Linear transformation
         out = self.linear(out)
 
         # Optional activation
@@ -200,17 +195,77 @@ def train_gnn_simulator(model, gnn, dataloader, optimizer, device):
         print(f"Epoch {epoch} Loss: {total_loss:.4f}")
         
 def evaluate_gnn_simulator(mlp, gnn, dataloader, device):
+    G = mlp_to_graph("./trained_networks/mlp_0.pkl")
     gnn.eval()
     total_loss = 0
+
+    mlp_predicted = []
+    mlp_vectors = []
+    gnn_predicted = []
+    gnn_vectors = []
     with torch.no_grad():
         for x, _ in dataloader:
             x = x.to(device)
+            
             mlp_out = mlp(x.view(x.size(0), -1))
-            gnn_out = gnn(x.view(x.size(0), -1))
+            mlp_vectors.append(mlp_out)
+            predicted_digit = mlp_out.argmax(dim=1).item()
+            mlp_predicted.append(predicted_digit)
+            
+            pyg_data = convert_networkx_to_pyg_data(G, mnist_input=x[0])
+            
+            gnn_out = gnn(x_input=pyg_data.x,
+                edge_index=pyg_data.edge_index,
+                edge_attr=pyg_data.edge_attr,
+                node_types=pyg_data.node_types,
+                bias_vec=pyg_data.bias_vec
+            )
+            gnn_out = gnn_out.view(1, -1)
+            gnn_vectors.append(gnn_out)
+            
+            predicted_digit = gnn_out.argmax(dim=1).item()
+            gnn_predicted.append(predicted_digit)
+            
             loss = torch.nn.functional.mse_loss(gnn_out, mlp_out)
             total_loss += loss.item()
+            
     print(f"Test MSE loss: {total_loss / len(dataloader):.6f}")
+    return mlp_predicted, mlp_vectors, gnn_predicted, gnn_vectors
 
+def prediction_comparison_graph(mlp_predicted, gnn_predicted):
+    x = list(range(1, len(mlp_predicted) + 1))  # Input indices
+
+    plt.figure(figsize=(10, 5))
+    plt.scatter(x, mlp_predicted, marker='o', label='MLP Prediction', color='blue')
+    plt.scatter(x, gnn_predicted, marker='x', label='GNN Prediction', color='orange')
+
+    plt.title("Predicted Digits from MLP vs GNN")
+    plt.xlabel("Input Index")
+    plt.ylabel("Predicted Digit")
+    plt.yticks(range(10))  # Digits 0 through 9
+    plt.legend()
+    plt.grid(True)
+    plt.show()
+
+def vector_comparison_graph(mlp_vectors, gnn_vectors):
+    cos_sims = []
+
+    for mlp_out, gnn_out in zip(mlp_vectors, gnn_vectors):
+        mlp_vec = mlp_out.squeeze()     # shape: [10]
+        gnn_vec = gnn_out.squeeze()     # shape: [10]
+        
+        cos_sim = F.cosine_similarity(mlp_vec.unsqueeze(0), gnn_vec.unsqueeze(0)).item()
+        cos_sims.append(cos_sim)
+
+    # Plotting
+    # plt.figure(figsize=(10, 5))
+    plt.plot(range(1, len(cos_sims)+1), cos_sims, marker='o', linestyle="None")
+    plt.title("Cosine Similarity Between MLP and GNN Outputs")
+    plt.xlabel("Input Index")
+    plt.ylabel("Cosine Similarity")
+    plt.ylim([0, 1.05])
+    plt.grid(True)
+    plt.show()
 
 if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -248,4 +303,14 @@ if __name__ == "__main__":
 
     # # Save model
     # torch.save(gnn.state_dict(), "gnn_forward_op_30.pt")
+    
+    # Load in model
+    gnn.load_state_dict(torch.load("gnn_forward_op_30.pt"))
+    gnn.eval()  # Set to evaluation mode if testing
+    print("Loaded gnn")
+    
+    mlp_predicted, mlp_vectors, gnn_predicted, gnn_vectors = evaluate_gnn_simulator(model, gnn, test_loader, device)
+    
+    prediction_comparison_graph(mlp_predicted, gnn_predicted)
+    vector_comparison_graph(mlp_vectors, gnn_vectors)
     
